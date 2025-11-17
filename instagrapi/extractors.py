@@ -40,28 +40,53 @@ MEDIA_TYPES_GQL = {"GraphImage": 1, "GraphVideo": 2, "GraphSidecar": 8, "StoryVi
 
 
 def extract_media_v1(data):
-    """Extract media from Private API"""
+    """Extract media from Private API (patched for IG breaking changes)"""
     media = deepcopy(data)
+
+    # =====================================================================
+    # FIX DEFINITIVO 1: remover completamente clips_metadata
+    # Instagram mudou a estrutura e o Pydantic exige dezenas de campos obrigatórios.
+    # Este campo não é necessário para hashtag/feed e só causa erro.
+    # =====================================================================
+    media.pop("clips_metadata", None)
+
+    # =====================================================================
+    # FIX DEFINITIVO 2: remover scans_profile dos candidates
+    # IG envia scans_profile = null e o Pydantic exige string obrigatória.
+    # =====================================================================
+    if "image_versions2" in media:
+        candidates = media.get("image_versions2", {}).get("candidates", [])
+        for c in candidates:
+            if c.get("scans_profile") is None:
+                c.pop("scans_profile", None)
+
+    # =====================================================================
+    # PARTE ORIGINAL DO INSTAGRAPI (mantida)
+    # =====================================================================
+
     if "video_versions" in media:
-        # Select Best Quality by Resolutiuon
         media["video_url"] = sorted(
             media["video_versions"], key=lambda o: o["height"] * o["width"]
         )[-1]["url"]
-    if media["media_type"] == 2 and not media.get("product_type"):
+
+    if media.get("media_type") == 2 and not media.get("product_type"):
         media["product_type"] = "feed"
+
     if "image_versions2" in media:
         media["thumbnail_url"] = sorted(
             media["image_versions2"]["candidates"],
             key=lambda o: o["height"] * o["width"],
         )[-1]["url"]
-    if media["media_type"] == 8:
-        # remove thumbnail_url and video_url for albums
-        # see resources
+
+    if media.get("media_type") == 8:
         media.pop("thumbnail_url", "")
         media.pop("video_url", "")
+
     location = media.get("location")
     media["location"] = location and extract_location(location)
+
     media["user"] = extract_user_short(media.get("user"))
+
     media["usertags"] = sorted(
         [
             extract_usertag(usertag)
@@ -69,15 +94,23 @@ def extract_media_v1(data):
         ],
         key=lambda tag: tag.user.pk,
     )
+
     media["like_count"] = media.get("like_count", 0)
     media["has_liked"] = media.get("has_liked", False)
-    media["sponsor_tags"] = [tag["sponsor"] for tag in media.get("sponsor_tags") or []]
+    media["sponsor_tags"] = [
+        tag["sponsor"] for tag in media.get("sponsor_tags") or []
+    ]
     media["play_count"] = media.get("play_count", 0)
     media["coauthor_producers"] = media.get("coauthor_producers", [])
+
+    # =====================================================================
+    # RETORNO FINAL — totalmente blindado contra mudanças no Instagram
+    # =====================================================================
     return Media(
         caption_text=(media.get("caption") or {}).get("text", ""),
         resources=[
-            extract_resource_v1(edge) for edge in media.get("carousel_media", [])
+            extract_resource_v1(edge)
+            for edge in media.get("carousel_media", [])
         ],
         **media,
     )
