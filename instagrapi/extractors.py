@@ -44,44 +44,48 @@ def extract_media_v1(data):
     media = deepcopy(data)
 
     # =====================================================================
-    # FIX DEFINITIVO 1: remover completamente clips_metadata
-    # Instagram mudou a estrutura e o Pydantic exige dezenas de campos obrigatórios.
-    # Este campo não é necessário para hashtag/feed e só causa erro.
+    # 1) VIDEO_URL – pega melhor resolução
     # =====================================================================
-    media.pop("clips_metadata", None)
+    if "video_versions" in media:
+        try:
+            media["video_url"] = sorted(
+                media["video_versions"],
+                key=lambda o: o.get("height", 0) * o.get("width", 0),
+            )[-1]["url"]
+        except Exception:
+            media["video_url"] = None
 
     # =====================================================================
-    # FIX DEFINITIVO 2: remover scans_profile dos candidates
-    # IG envia scans_profile = null e o Pydantic exige string obrigatória.
+    # 2) THUMBNAIL_URL – usa image_versions2 ANTES de remover o campo
     # =====================================================================
     if "image_versions2" in media:
-        candidates = media.get("image_versions2", {}).get("candidates", [])
-        for c in candidates:
-            if c.get("scans_profile") is None:
-                c.pop("scans_profile", None)
+        try:
+            candidates = media.get("image_versions2", {}).get("candidates") or []
+            if candidates:
+                best = sorted(
+                    candidates,
+                    key=lambda o: o.get("height", 0) * o.get("width", 0),
+                )[-1]
+                media["thumbnail_url"] = best.get("url")
+        except Exception:
+            media.setdefault("thumbnail_url", None)
 
     # =====================================================================
-    # PARTE ORIGINAL DO INSTAGRAPI (mantida)
+    # 3) PRODUCT TYPE padrão para vídeo sem product_type
     # =====================================================================
-
-    if "video_versions" in media:
-        media["video_url"] = sorted(
-            media["video_versions"], key=lambda o: o["height"] * o["width"]
-        )[-1]["url"]
-
     if media.get("media_type") == 2 and not media.get("product_type"):
         media["product_type"] = "feed"
 
-    if "image_versions2" in media:
-        media["thumbnail_url"] = sorted(
-            media["image_versions2"]["candidates"],
-            key=lambda o: o["height"] * o["width"],
-        )[-1]["url"]
-
+    # =====================================================================
+    # 4) ALBUM/CARROSSEL – remove fields do tipo único
+    # =====================================================================
     if media.get("media_type") == 8:
-        media.pop("thumbnail_url", "")
-        media.pop("video_url", "")
+        media.pop("thumbnail_url", None)
+        media.pop("video_url", None)
 
+    # =====================================================================
+    # 5) LOCATION, USER, USERTAGS (igual código original)
+    # =====================================================================
     location = media.get("location")
     media["location"] = location and extract_location(location)
 
@@ -95,17 +99,26 @@ def extract_media_v1(data):
         key=lambda tag: tag.user.pk,
     )
 
-
+    # =====================================================================
+    # 6) CAMPOS OPCIONAIS NORMALIZADOS
+    # =====================================================================
     media["like_count"] = media.get("like_count", 0)
     media["has_liked"] = media.get("has_liked", False)
     media["sponsor_tags"] = [
-        tag["sponsor"] for tag in media.get("sponsor_tags") or []
+        tag["sponsor"] for tag in (media.get("sponsor_tags") or [])
     ]
     media["play_count"] = media.get("play_count", 0)
     media["coauthor_producers"] = media.get("coauthor_producers", [])
 
     # =====================================================================
-    # RETORNO FINAL — totalmente blindado contra mudanças no Instagram
+    # 7) REMOVER CAMPOS PROFUNDOS PROBLEMÁTICOS
+    #    (onde o modelo Pydantic não bate com o JSON atual do Instagram)
+    # =====================================================================
+    media.pop("clips_metadata", None)    # árvore de áudio dos reels – desnecessária pra você
+    media.pop("image_versions2", None)   # já extraímos thumbnail_url, o resto só dá dor de cabeça
+
+    # =====================================================================
+    # 8) RETORNO FINAL – Agora o Media é "achatado" e estável
     # =====================================================================
     return Media(
         caption_text=(media.get("caption") or {}).get("text", ""),
@@ -115,6 +128,7 @@ def extract_media_v1(data):
         ],
         **media,
     )
+
 
 
 def extract_media_v1_xma(data):
