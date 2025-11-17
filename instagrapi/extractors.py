@@ -95,6 +95,7 @@ def extract_media_v1(data):
         key=lambda tag: tag.user.pk,
     )
 
+
     media["like_count"] = media.get("like_count", 0)
     media["has_liked"] = media.get("has_liked", False)
     media["sponsor_tags"] = [
